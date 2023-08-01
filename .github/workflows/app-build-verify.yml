@@ -277,6 +277,9 @@ jobs:
         && contains(fromJSON('["", "Gradle"]'), inputs.target-format)
         && startsWith(inputs.framework, 'toga')
       run: |
+        # install Command-line Tools version 9.0
+        ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager 'cmdline-tools;9.0'
+
         cd tests/apps/verify-${{ inputs.framework }}
         briefcase create android gradle
         briefcase build android gradle
