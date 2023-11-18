@@ -32,14 +32,6 @@ on:
         description: "The target format for the app, e.g. appimage, xcode, app, etc. Leave blank all supported formats."
         default: ""
         type: string
-      briefcase-template-source:
-        description: "Path to use for --template for `briefcase new` to create app."
-        default: ""
-        type: string
-      briefcase-template-branch:
-        description: "Git branch to use for --template-branch for `briefcase new` to create app."
-        default: ""
-        type: string
 
 defaults:
   run:
@@ -53,7 +45,25 @@ jobs:
     name: Verify App Build
     runs-on: ${{ inputs.runner-os }}
     timeout-minutes: 30
+    env:
+      WIX: ""  # force Briefcase to install WiX
+      QT_QPA_PLATFORM: offscreen  # set window for PySide6
+      SDL_AUDIODRIVER: dummy  # effectively disable audio for SDL
     steps:
+
+    - name: Workflow Constants
+      id: constants
+      run: |
+        case "$(tr '[:upper:]' '[:lower:]' <<< '${{ inputs.runner-os }}')" in
+        ubuntu*  ) BRIEFCASE_DIR="~/.cache/briefcase" ;;
+        macos*   ) BRIEFCASE_DIR="~/Library/Caches/org.beeware.briefcase" ;;
+        windows* ) BRIEFCASE_DIR="~/AppData/Local/BeeWare/briefcase/Cache" ;;
+        *        ) echo "::error::Failed to determine the Briefcase data directory path" ;;
+        esac
+        echo "briefcase-data-dir=${BRIEFCASE_DIR}" | tee -a ${GITHUB_OUTPUT}
+
+        SYSTEM_PYTHON_VER=$(/usr/bin/python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        echo "system-python-version=${SYSTEM_PYTHON_VER}" | tee -a ${GITHUB_OUTPUT}
 
     - name: Checkout ${{ inputs.repository }}
       uses: actions/checkout@v4.1.1
@@ -67,35 +77,18 @@ jobs:
         repository: beeware/.github
         path: beeware-.github
 
-    - name: Package Name
-      id: package
-      run: echo "name=$(basename '${{ inputs.repository }}')" | tee -a ${GITHUB_OUTPUT}
-
-    - name: Determine Cache Directory
-      id: dirs
-      run: |
-        case "$(tr '[:upper:]' '[:lower:]' <<< '${{ inputs.runner-os }}')" in
-          ubuntu*  ) BRIEFCASE_DIR="~/.cache/briefcase" ;;
-          macos*   ) BRIEFCASE_DIR="~/Library/Caches/org.beeware.briefcase" ;;
-          windows* ) BRIEFCASE_DIR="~/AppData/Local/BeeWare/briefcase/Cache" ;;
-          *        ) echo "::error::Failed to determine the Briefcase data directory path" ;;
-        esac
-        echo "briefcase-data-dir=${BRIEFCASE_DIR}" | tee -a ${GITHUB_OUTPUT}
+    - name: Update Package Manager
+      if: startsWith(inputs.runner-ls, 'ubuntu')
+      run: sudo apt --assume-yes update
 
     - name: Cache Briefcase Tools
       uses: actions/cache@v3.3.2
       with:
         key: briefcase-data|${{ inputs.runner-os }}|${{ inputs.repository }}|${{ inputs.framework }}|${{ inputs.target-platform }}|${{ inputs.target-format }}
-        path: ${{ steps.dirs.outputs.briefcase-data-dir }}
-
-    - name: Determine System python3 Version
-      id: system-python
-      run: |
-        SYSTEM_PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-        echo "version=${SYSTEM_PYTHON_VER}" | tee -a ${GITHUB_OUTPUT}
+        path: ${{ steps.constants.outputs.briefcase-data-dir }}
 
     - name: Set Up Python
-      # TODO:PR: linux system requires System Python is python...
+      # Linux System requires System Python is python to run the app
       if: ${{ !startsWith(inputs.runner-os, 'ubuntu') }}
       uses: actions/setup-python@v4.7.1
       with:
@@ -106,12 +99,12 @@ jobs:
           **/pyproject.toml
           .pre-commit-config.yaml
 
-    - name: Get Packages
+    - name: Get Briefcase Package
       # Briefcase will build and package itself in a previous step in its CI
       if: endsWith(inputs.repository, 'briefcase')
       uses: actions/download-artifact@v3.0.2
       with:
-        name: packages-${{ steps.package.outputs.name }}
+        name: packages-briefcase
         path: dist
 
     - name: Install Briefcase Artefact
@@ -123,7 +116,7 @@ jobs:
       uses: ./beeware-.github/.github/actions/install-briefcase
 
     - name: Determine Briefcase Template Path
-      # If the briefcase-template repo is being tested, use the current checkout
+      # If the briefcase-template repo is being tested, use its current repo checkout
       id: template
       if: endsWith(inputs.repository, 'briefcase-template')
       run: echo "path=${{ github.workspace }}" | tee -a ${GITHUB_OUTPUT}
@@ -133,8 +126,7 @@ jobs:
       uses: ./beeware-.github/.github/actions/app-create
       with:
         framework: ${{ inputs.framework }}
-        briefcase-template-source: ${{ inputs.briefcase-template-source || steps.template.outputs.path }}
-        briefcase-template-branch: ${{ inputs.briefcase-template-branch }}
+        briefcase-template-source: ${{ steps.template.outputs.path }}
 
     - name: Determine Output Format Configuration
       # only used for the template repos so apps are built with the PR version of the template;
@@ -154,8 +146,6 @@ jobs:
         && contains(fromJSON('["", "macOS"]'), inputs.target-platform)
         && contains(fromJSON('["", "app"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        SDL_VIDEODRIVER: dummy
       run: |
         briefcase create macOS app \
           ${{ steps.output-format.outputs.template-override }}
@@ -169,8 +159,6 @@ jobs:
         && contains(fromJSON('["", "macOS"]'), inputs.target-platform)
         && contains(fromJSON('["", "Xcode"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        SDL_VIDEODRIVER: dummy
       run: |
         briefcase create macOS Xcode \
           ${{ steps.output-format.outputs.template-override }}
@@ -184,9 +172,6 @@ jobs:
         && contains(fromJSON('["", "Windows"]'), inputs.target-platform)
         && contains(fromJSON('["", "app"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        WIX: ""  # force Briefcase to install and use its own version of WiX
-        SDL_AUDIODRIVER: dummy
       run: |
         briefcase create windows app \
           ${{ steps.output-format.outputs.template-override }}
@@ -200,9 +185,6 @@ jobs:
         && contains(fromJSON('["", "Windows"]'), inputs.target-platform)
         && contains(fromJSON('["", "VisualStudio"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        WIX: ""  # force Briefcase to install and use its own version of WiX
-        SDL_AUDIODRIVER: dummy
       run: |
         briefcase create windows VisualStudio \
           ${{ steps.output-format.outputs.template-override }}
@@ -213,20 +195,19 @@ jobs:
     - name: Build Linux System Project (Ubuntu, local)
       if: >
         startsWith(inputs.runner-os, 'ubuntu')
-        && startsWith(inputs.python-version, steps.system-python.outputs.version)
+        && startsWith(inputs.python-version, steps.constants.outputs.system-python-version)
         && contains(fromJSON('["", "Linux"]'), inputs.target-platform)
         && contains(fromJSON('["", "system"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        QT_QPA_PLATFORM: offscreen
-        SDL_AUDIODRIVER: dummy
       run: |
-        sudo apt --assume-yes update
-        sudo apt --assume-yes install --no-install-recommends \
-          python3-dev python3-pip \
-          libcairo2-dev libgirepository1.0-dev gir1.2-gtk-3.0 \
-          libgl1 libegl1-mesa \
-          libsdl2-2.0-0 libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 libsdl2-gfx-1.0-0 libsdl2-ttf-2.0-0
+        PACKAGES="python3-dev python3-pip"
+        case "$(tr '[:upper:]' '[:lower:]' <<< '${{ inputs.framework }}')" in
+          toga* ) PACKAGES="${PACKAGES} libcairo2-dev libgirepository1.0-dev gir1.2-gtk-3.0" ;;
+          pyside* ) PACKAGES="${PACKAGES} libgl1 libegl1-mesa" ;;
+          ppb* ) PACKAGES="${PACKAGES} libsdl2-2.0-0 libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 libsdl2-gfx-1.0-0 libsdl2-ttf-2.0-0" ;;
+        esac
+
+        sudo apt --assume-yes install --no-install-recommends ${PACKAGES}
 
         briefcase create linux system \
           ${{ steps.output-format.outputs.template-override }}
@@ -253,10 +234,10 @@ jobs:
         && contains(fromJSON('["", "system"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
       run: |
-        briefcase create linux system --target fedora:37 \
+        briefcase create linux system --target fedora:39 \
           ${{ steps.output-format.outputs.template-override }}
-        briefcase build linux system --target fedora:37
-        briefcase package linux system --target fedora:37 --adhoc-sign
+        briefcase build linux system --target fedora:39
+        briefcase package linux system --target fedora:39 --adhoc-sign
 
     - name: Build Linux System Project (Arch, Dockerized)
       if: >
@@ -289,14 +270,13 @@ jobs:
         && contains(fromJSON('["Linux"]'), inputs.target-platform)
         && contains(fromJSON('["AppImage"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        SDL_AUDIODRIVER: dummy
-        QT_QPA_PLATFORM: offscreen
       run: |
-        sudo apt --assume-yes update
-        sudo apt --assume-yes install --no-install-recommends \
-          libfuse2 libthai-dev libfribidi0 libfontconfig1 libx11-6 libegl1 libgl1 libharfbuzz0b \
-          libsdl2-2.0-0 libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 libsdl2-gfx-1.0-0 libsdl2-ttf-2.0-0
+        case "$(tr '[:upper:]' '[:lower:]' <<< '${{ inputs.framework }}')" in
+          toga* ) PACKAGES="${PACKAGES} libfuse2 libthai-dev libfribidi0 libfontconfig1 libx11-6 libegl1 libgl1 libharfbuzz0b" ;;
+          ppb* ) PACKAGES="${PACKAGES} libsdl2-2.0-0 libsdl2-mixer-2.0-0 libsdl2-image-2.0-0 libsdl2-gfx-1.0-0 libsdl2-ttf-2.0-0" ;;
+        esac
+
+        [ -n ${PACKAGES} ] && sudo apt --assume-yes install --no-install-recommends
 
         # PyGObject>=3.46.0 requires a version of glibc that isn't available in manylinux images;
         # so, the version will need to be constrained to successfully build an AppImage with Toga.
@@ -318,10 +298,7 @@ jobs:
         && contains(fromJSON('["", "Linux"]'), inputs.target-platform)
         && contains(fromJSON('["", "Flatpak"]'), inputs.target-format)
       working-directory: ${{ steps.create.outputs.project-path }}
-      env:
-        SDL_AUDIODRIVER: dummy
       run: |
-        sudo apt --assume-yes update
         sudo apt --assume-yes install --no-install-recommends flatpak flatpak-builder elfutils
 
         briefcase create linux flatpak \
@@ -355,15 +332,16 @@ jobs:
         fi
 
         # the emulator does not run properly on Windows...so, only run on macOS and Linux
-        if [ "${{ startsWith(inputs.runner-os, 'windows') }}" = "false" ]; then
-          briefcase run android gradle \
-            -d '{"avd":"beePhone"}' \
-            --Xemulator=-no-window \
-            --Xemulator=-no-snapshot \
-            --Xemulator=-no-audio \
-            --Xemulator=-no-boot-anim \
-            --shutdown-on-exit
-        fi
+        # if [ "${{ startsWith(inputs.runner-os, 'windows') }}" = "false" ]; then
+        briefcase run android gradle \
+          -d '{"avd":"beePhone"}' \
+          --Xemulator=-no-window \
+          --Xemulator=-no-snapshot \
+          --Xemulator=-no-audio \
+          --Xemulator=-no-boot-anim \
+          --shutdown-on-exit \
+          --verbose --verbose --verbose
+        # fi
 
         briefcase package android gradle --adhoc-sign
 

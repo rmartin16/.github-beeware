@@ -19,14 +19,6 @@ on:
         description: "Framework to use to build the App, e.g. toga."
         required: true
         type: string
-      briefcase-template-source:
-        description: "Path to use for --template for `briefcase new` to create app."
-        default: ""
-        type: string
-      briefcase-template-branch:
-        description: "Git branch to use for --template-branch for `briefcase new` to create app."
-        default: ""
-        type: string
 
 defaults:
   run:
@@ -105,8 +97,7 @@ jobs:
       uses: ./beeware-.github/.github/actions/app-create
       with:
         framework: ${{ inputs.framework }}
-        briefcase-template-source: ${{ inputs.briefcase-template-source || steps.template.outputs.path }}
-        briefcase-template-branch: ${{ inputs.briefcase-template-branch }}
+        briefcase-template-source: ${{ steps.template.outputs.path }}
 
     - name: Run Flake8
       working-directory: ${{ steps.create.outputs.project-path }}
